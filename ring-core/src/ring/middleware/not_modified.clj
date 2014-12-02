@@ -22,20 +22,17 @@
          modified-since
          (not (.before modified-since modified-date)))))
 
-(defn- generate-response [response request]
-  (if (or (etag-match? request response)
-          (not-modified-since? request response))
-    (do (close! (:body response))
-        (-> response
-            (assoc :status 304)
-            (header "Content-Length" 0)
-            (assoc :body nil)))
-    response))
+(defn- set-not-modified [response request]
+  (close! (:body response))
+  (-> response
+      (assoc :status 304)
+      (header "Content-Length" 0)
+      (assoc :body nil)))
 
 (defn- read-request? [{:keys [request-method]}]
   (#{:get :head} request-method))
 
-(defn- successful-response? [{:keys [status]}]
+(defn- ok-response? [{:keys [status]}]
   (= status 200))
 
 (defn not-modified-response
@@ -43,8 +40,11 @@
   See: wrap-not-modified."
   {:added "1.2"}
   [response request]
-  (if (and (read-request? request) (successful-response? response))
-    (generate-response response request)
+  (if (and (read-request? request)
+           (ok-response? response)
+           (or (etag-match? request response)
+               (not-modified-since? request response)))
+    (set-not-modified response request)
     response))
 
 (defn wrap-not-modified
