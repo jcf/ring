@@ -1,67 +1,65 @@
 (ns ring.middleware.test.not-modified
   (:use clojure.test
-        ring.middleware.not-modified))
+        ring.middleware.not-modified
+        [ring.util.response :only [get-header]]))
 
-(defn- handler-etag [etag]
-  (constantly
-   {:status 200
-    :headers {"etag" etag}
-    :body ""}))
+(def weak-digest
+  "W/3747421e99ba5399f6aecebb8c7fee3a")
 
-(defn- handler-modified [modified]
-  (constantly
-   {:status 200
-    :headers {"last-modified" modified}
-    :body ""}))
+(def date-older "Sat, 01 Jan 2000 12:00:00 GMT")
+(def date-newer "Sun, 02 Jan 2000 12:00:00 GMT")
 
-(defn- etag-request [etag]
-  {:headers {"if-none-match" etag}})
+(def test-data
+  #{{:desc "GET request with no novel headers"
+     :request {:request-method :get :headers {}}
+     :in      {:status 200 :headers {}}
+     :out     {:status 200 :etag nil :last-modified nil}}
 
-(defn- modified-request [modified-date]
-  {:headers {"if-modified-since" modified-date}})
+    {:desc "GET request with matching etag and if-none-match"
+     :request {:request-method :get :headers {"if-none-match" weak-digest}}
+     :in      {:status 200 :headers {"etag" weak-digest}}
+     :out     {:status 304 :etag weak-digest :last-modified nil}}
 
-(deftest test-wrap-not-modified
-  (with-redefs [ring.middleware.not-modified/not-modified-response #(vector %1 %2)]
-    (let [req (modified-request "Sun, 23 Sep 2012 11:00:00 GMT")
-          handler (handler-modified "Jan, 23 Sep 2012 11:00:00 GMT")]
-      (is (= [(handler req) req] ; Not modified since is called with expected args
-             ((wrap-not-modified handler) req))))))
+    {:desc "GET request with last-modified after if-modified-since"
+     :request {:request-method :get :headers {"if-modified-since" date-older}}
+     :in      {:status 200 :headers {"last-modified" date-newer}}
+     :out     {:status 200 :etag nil :last-modified date-newer}}
+
+    {:desc "GET request with last-modified before if-modified-since"
+     :request {:request-method :get :headers {"if-modified-since" date-newer}}
+     :in      {:status 200 :headers {"last-modified" date-older}}
+     :out     {:status 304 :etag nil :last-modified date-older}}
+
+    {:desc "HEAD request with no novel headers"
+     :request {:request-method :head :headers {}}
+     :in      {:status 200 :headers {}}
+     :out     {:status 200 :etag nil :last-modified nil}}
+
+    {:desc "HEAD request with matching etag and if-none-match"
+     :request {:request-method :head :headers {"if-none-match" weak-digest}}
+     :in      {:status 200 :headers {"etag" weak-digest}}
+     :out     {:status 304 :etag weak-digest :last-modified nil}}
+
+    {:desc "HEAD request with last-modified after if-modified-since"
+     :request {:request-method :head :headers {"if-modified-since" date-older}}
+     :in      {:status 200 :headers {"last-modified" date-newer}}
+     :out     {:status 200 :etag nil :last-modified date-newer}}
+
+    {:desc "HEAD request with last-modified before if-modified-since"
+     :request {:request-method :head :headers {"if-modified-since" date-newer}}
+     :in      {:status 200 :headers {"last-modified" date-older}}
+     :out     {:status 304 :etag nil :last-modified date-older}}
+
+    {:desc "PUT request with etag"
+     :request {:request-method :put}
+     :in      {:status 200 :headers {"etag" weak-digest}}
+     :out     {:status 200 :etag weak-digest :last-modified nil}}})
 
 (deftest test-not-modified-response
-  (testing "etag match"
-    (let [known-etag "known-etag"
-          request {:headers {"if-none-match" known-etag}}
-          handler-resp #(hash-map :status 200 :headers {"etag" %} :body "")]
-      (is (= 304 (:status (not-modified-response (handler-resp known-etag) request))))
-      (is (= 200 (:status (not-modified-response (handler-resp "unknown-etag") request))))))
-
-  (testing "not modified"
-    (let [req #(hash-map :headers {"if-modified-since" %})
-          last-modified "Sun, 23 Sep 2012 11:00:00 GMT"
-          h-resp {:status 200 :headers {"Last-Modified" last-modified} :body ""}]
-      (is (= 304 (:status (not-modified-response h-resp (req last-modified)))))
-      (is (= 304 (:status (not-modified-response h-resp (req "Sun, 23 Sep 2012 11:52:50 GMT")))))
-      (is (= 200 (:status (not-modified-response h-resp (req "Sun, 23 Sep 2012 10:00:50 GMT")))))))
-
-  (testing "not modified body and content-length"
-    (let [req   #(hash-map :headers {"if-modified-since" %})
-          last-modified "Sun, 23 Sep 2012 11:00:00 GMT"
-          h-resp {:status 200 :headers {"Last-Modified" last-modified} :body ""}
-          resp   (not-modified-response h-resp (req last-modified))]
-      (is (nil? (:body resp)))
-      (is (= (get-in resp [:headers "Content-Length"]) "0"))))
-
-  (testing "no modification info"
-    (let [response {:status 200 :headers {} :body ""}]
-      (is (= 200 (:status (not-modified-response response (etag-request "\"12345\"")))))
-      (is (= 200 (:status (not-modified-response response (modified-request "Sun, 23 Sep 2012 10:00:00 GMT")))))))
-
-  (testing "header case insensitivity"
-    (let [h-resp {:status 200
-                  :headers {"LasT-ModiFied" "Sun, 23 Sep 2012 11:00:00 GMT"
-                            "EtAg" "\"123456abcdef\""}}]
-      (is (= 304 (:status (not-modified-response
-                           h-resp {:headers {"if-modified-since"
-                                             "Sun, 23 Sep 2012 11:00:00 GMT"}}))))
-      (is (= 304 (:status (not-modified-response
-                           h-resp {:headers {"if-none-match" "\"123456abcdef\""}})))))))
+  (doseq [{:keys [desc request in out]} test-data]
+    (let [{:keys [status etag last-modified]} out
+          response (not-modified-response in request)]
+      (testing desc
+        (is (= status (:status response)))
+        (is (= etag (get-header response "etag")))
+        (is (= last-modified (get-header response "last-modified")))))))

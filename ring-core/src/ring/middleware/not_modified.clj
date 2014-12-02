@@ -1,6 +1,8 @@
 (ns ring.middleware.not-modified
   "Middleware that returns a 304 Not Modified response for responses with
-  Last-Modified headers."
+  Last-Modified headers.
+
+  http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html#sec10.3.5"
   (:use [ring.util.time :only (parse-date)]
         [ring.util.response :only (status get-header header)]
         [ring.util.io :only (close!)]))
@@ -20,11 +22,7 @@
          modified-since
          (not (.before modified-since modified-date)))))
 
-(defn not-modified-response
-  "Returns 304 or original response based on response and request.
-  See: wrap-not-modified."
-  {:added "1.2"}
-  [response request]
+(defn- generate-response [response request]
   (if (or (etag-match? request response)
           (not-modified-since? request response))
     (do (close! (:body response))
@@ -32,6 +30,21 @@
             (assoc :status 304)
             (header "Content-Length" 0)
             (assoc :body nil)))
+    response))
+
+(defn- read-request? [{:keys [request-method]}]
+  (#{:get :head} request-method))
+
+(defn- successful-response? [{:keys [status]}]
+  (= status 200))
+
+(defn not-modified-response
+  "Returns 304 or original response based on response and request.
+  See: wrap-not-modified."
+  {:added "1.2"}
+  [response request]
+  (if (and (read-request? request) (successful-response? response))
+    (generate-response response request)
     response))
 
 (defn wrap-not-modified
